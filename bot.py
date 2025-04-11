@@ -20,6 +20,7 @@ GITHUB_REPO = os.getenv("GITHUB_REPO")
 WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")
 PORT = int(os.getenv("PORT", 8443))
 SECRET_TOKEN = os.getenv("SECRET_TOKEN")
+TELEGRAM_GROUP_CHAT_ID = os.getenv("TELEGRAM_GROUP_CHAT_ID")
 
 # GitHub headers
 headers = {
@@ -82,6 +83,40 @@ def webhook():
         loop.run_until_complete(application.process_update(update))
         
         return "OK"
+
+# Vercel webhook route
+@flask_app.route("/webhook/vercel", methods=["POST"])
+def vercel_webhook():
+    try:
+        # Parse the JSON payload from Vercel
+        payload = request.get_json(force=True)
+        
+        # Extract relevant information
+        deployment_state = payload.get("state", "unknown")
+        deployment_url = payload.get("url", "No URL provided")
+        project_name = payload.get("projectName", "Unknown Project")
+        deployment_id = payload.get("id", "Unknown ID")
+
+        # Define the message based on the deployment state
+        if deployment_state == "READY":
+            message = f"🚀 Deployment Successful!\nProject: {project_name}\nURL: {deployment_url}"
+        elif deployment_state == "ERROR":
+            message = f"❌ Deployment Failed!\nProject: {project_name}\nDeployment ID: {deployment_id}"
+        else:
+            message = f"ℹ️ Deployment State: {deployment_state}\nProject: {project_name}"
+
+        # Send the message to the Telegram group
+        chat_id = TELEGRAM_GROUP_CHAT_ID
+        if chat_id:
+            loop.run_until_complete(application.bot.send_message(chat_id=chat_id, text=message))
+        else:
+            logger.error("Telegram group chat ID not set.")
+
+        return "OK"
+    
+    except Exception as e:
+        logger.error(f"Error processing Vercel webhook: {e}")
+        return "Error", 500
 
 if __name__ == "__main__":
     # Set the webhook using the event loop
