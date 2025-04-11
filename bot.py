@@ -11,6 +11,7 @@ from telegram.ext import (
 )
 
 from dotenv import load_dotenv
+
 load_dotenv()
 
 # Env vars
@@ -24,8 +25,8 @@ TELEGRAM_GROUP_CHAT_ID = os.getenv("TELEGRAM_GROUP_CHAT_ID")
 
 # GitHub headers
 headers = {
-    'Authorization': f'token {GITHUB_TOKEN}',
-    'Accept': 'application/vnd.github+json'
+    "Authorization": f"token {GITHUB_TOKEN}",
+    "Accept": "application/vnd.github+json",
 }
 
 # Logging
@@ -39,26 +40,32 @@ flask_app = Flask(__name__)
 async def hello(update: Update, context: ContextTypes.DEFAULT_TYPE):
     await update.message.reply_text("👋 Hello! The bot is up and running.")
 
+
 async def pull(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Please provide a PR number or branch name.")
         return
 
     pr_ref = context.args[0]
-    pr_url = f'https://api.github.com/repos/{GITHUB_REPO}/pulls/{pr_ref}'
+    pr_url = f"https://api.github.com/repos/{GITHUB_REPO}/pulls/{pr_ref}"
     pr_resp = requests.get(pr_url, headers=headers)
 
     if pr_resp.status_code != 200:
         await update.message.reply_text(f"❌ PR #{pr_ref} not found.")
         return
 
-    merge_url = f'https://api.github.com/repos/{GITHUB_REPO}/pulls/{pr_ref}/merge'
-    merge_resp = requests.put(merge_url, headers=headers, json={"commit_title": f"Merge PR #{pr_ref}"})
+    merge_url = f"https://api.github.com/repos/{GITHUB_REPO}/pulls/{pr_ref}/merge"
+    merge_resp = requests.put(
+        merge_url, headers=headers, json={"commit_title": f"Merge PR #{pr_ref}"}
+    )
 
     if merge_resp.status_code == 200:
         await update.message.reply_text(f"✅ PR #{pr_ref} has been merged!")
     else:
-        await update.message.reply_text(f"❌ Failed to merge PR #{pr_ref}. Error: {merge_resp.json().get('message')}")
+        await update.message.reply_text(
+            f"❌ Failed to merge PR #{pr_ref}. Error: {merge_resp.json().get('message')}"
+        )
+
 
 # Create application and add handlers
 application = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -72,51 +79,60 @@ asyncio.set_event_loop(loop)
 # Initialize the application
 loop.run_until_complete(application.initialize())
 
+
 # Webhook route
 @flask_app.route(f"/webhook/{SECRET_TOKEN}", methods=["POST"])
 def webhook():
     if request.method == "POST":
         update_data = request.get_json(force=True)
         update = Update.de_json(update_data, application.bot)
-        
+
         # Process the update asynchronously using the existing event loop
         loop.run_until_complete(application.process_update(update))
-        
+
         return "OK"
+
 
 # Vercel webhook route
 @flask_app.route("/webhook/vercel", methods=["POST"])
 def vercel_webhook():
     try:
-        # Parse the JSON payload from Vercel
+        # Log the incoming request
+        logger.info("Vercel webhook received")
         payload = request.get_json(force=True)
-        
-        # Extract relevant information
-        deployment_state = payload.get("state", "unknown")
-        deployment_url = payload.get("url", "No URL provided")
-        project_name = payload.get("projectName", "Unknown Project")
-        deployment_id = payload.get("id", "Unknown ID")
+        logger.info(f"Request payload: {payload}")
 
-        # Define the message based on the deployment state
-        if deployment_state == "READY":
-            message = f"🚀 Deployment Successful!\nProject: {project_name}\nURL: {deployment_url}"
-        elif deployment_state == "ERROR":
-            message = f"❌ Deployment Failed!\nProject: {project_name}\nDeployment ID: {deployment_id}"
+        # Extract the nested job object
+        job = payload.get("job", {})
+        job_id = job.get("id", "Unknown ID")
+        job_state = job.get("state", "unknown").upper()  # Normalize state to uppercase
+        created_at = job.get("createdAt", None)
+
+        # Define the message based on the job state
+        if job_state == "READY":
+            message = f"🚀 Deployment Successful!\nJob ID: {job_id}"
+        elif job_state == "ERROR":
+            message = f"❌ Deployment Failed!\nJob ID: {job_id}"
+        elif job_state == "PENDING":
+            message = f"⏳ Deployment Pending...\nJob ID: {job_id}"
         else:
-            message = f"ℹ️ Deployment State: {deployment_state}\nProject: {project_name}"
+            message = f"ℹ️ Deployment State: {job_state}\nJob ID: {job_id}"
 
         # Send the message to the Telegram group
         chat_id = TELEGRAM_GROUP_CHAT_ID
         if chat_id:
-            loop.run_until_complete(application.bot.send_message(chat_id=chat_id, text=message))
+            loop.run_until_complete(
+                application.bot.send_message(chat_id=chat_id, text=message)
+            )
         else:
             logger.error("Telegram group chat ID not set.")
 
-        return "OK"
-    
+        return "OK", 200  # Always return 200 to avoid retries from Vercel
+
     except Exception as e:
         logger.error(f"Error processing Vercel webhook: {e}")
-        return "Error", 500
+        return "Error", 200  # Always return 200 to avoid retries from Vercel
+
 
 if __name__ == "__main__":
     # Set the webhook using the event loop
