@@ -9,8 +9,8 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
 )
-
 from dotenv import load_dotenv
+from threading import Thread
 
 load_dotenv()
 
@@ -154,13 +154,11 @@ async def poll_vercel_deployments():
         await asyncio.sleep(60)  # Poll every 60 seconds
 
 
-# Start the polling task
-@flask_app.before_first_request
+# Start the polling task in a separate thread
 def start_polling_task():
     loop = asyncio.new_event_loop()
     asyncio.set_event_loop(loop)
-    loop.create_task(poll_vercel_deployments())
-    loop.run_forever()
+    loop.run_until_complete(poll_vercel_deployments())
 
 
 if __name__ == "__main__":
@@ -168,6 +166,9 @@ if __name__ == "__main__":
     webhook_url = f"{WEBHOOK_HOST}/webhook/{SECRET_TOKEN}"
     loop.run_until_complete(application.bot.set_webhook(url=webhook_url))
     print(f"✅ Webhook set: {webhook_url}")
+    
+    polling_thread = Thread(target=start_polling_task, daemon=True)
+    polling_thread.start()
 
     # Run the Flask application
     flask_app.run(host="0.0.0.0", port=PORT)
