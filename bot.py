@@ -112,10 +112,8 @@ async def poll_vercel_deployments():
         try:
             # Fetch recent deployments
             url = f"https://api.vercel.com/v6/deployments"
-            params = {
-                "projectId": VERCEL_PROJECT_ID               
-            }
-            response = requests.get(url, headers=vercel_headers, params=params)
+          
+            response = requests.get(url, headers=vercel_headers)
             response.raise_for_status()
             deployments = response.json().get("deployments", [])
 
