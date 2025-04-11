@@ -3,6 +3,8 @@ import logging
 import requests
 import asyncio
 import json
+import time
+import threading
 from flask import Flask, request, jsonify
 from telegram import Update, Bot
 from telegram.ext import (
@@ -23,22 +25,32 @@ PORT = int(os.getenv("PORT", 8443))
 SECRET_TOKEN = os.getenv("SECRET_TOKEN")
 CHAT_ID = os.getenv("CHAT_ID")  # Chat ID where deployment notifications will be sent
 
+# Set up file logging
+logging.basicConfig(
+    level=logging.DEBUG,
+    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.StreamHandler(),
+        logging.FileHandler('bot_debug.log')
+    ]
+)
+logger = logging.getLogger(__name__)
+
 # GitHub headers
 headers = {
     'Authorization': f'token {GITHUB_TOKEN}',
     'Accept': 'application/vnd.github+json'
 }
 
-# Enhanced logging
-logging.basicConfig(
-    level=logging.DEBUG,  # Set to DEBUG for more verbose logs
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
-
 # Flask app for webhook
 flask_app = Flask(__name__)
 
+# Create a global event loop in the main thread
+main_loop = asyncio.new_event_loop()
+asyncio.set_event_loop(main_loop)
+
+# Lock for thread-safe access to the event loop
+loop_lock = threading.Lock()
 
 async def hello(update: Update, context: ContextTypes.DEFAULT_TYPE):
     chat_id = update.effective_chat.id
@@ -97,14 +109,10 @@ application.add_handler(CommandHandler("pull", pull))
 application.add_handler(CommandHandler("hello", hello))
 application.add_handler(CommandHandler("test_vercel", test_vercel))
 
-# Create event loop for async processing
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
-
 # Initialize the application
-loop.run_until_complete(application.initialize())
+main_loop.run_until_complete(application.initialize())
 
-# Function to send deployment notification
+# Function to send deployment notification 
 async def send_deployment_notification(deployment_data):
     """Send notification about Vercel deployment status to the configured chat"""
     logger.debug(f"Preparing to send deployment notification with data: {deployment_data}")
@@ -188,6 +196,16 @@ async def send_deployment_notification(deployment_data):
         except Exception as inner_e:
             logger.error(f"Failed to send error message: {str(inner_e)}")
 
+# Helper function to run async functions from synchronous code (thread-safe)
+def run_async(coroutine):
+    with loop_lock:
+        try:
+            future = asyncio.run_coroutine_threadsafe(coroutine, main_loop)
+            return future.result()
+        except Exception as e:
+            logger.error(f"Error in run_async: {str(e)}", exc_info=True)
+            raise
+
 # Telegram webhook route
 @flask_app.route(f"/webhook/{SECRET_TOKEN}", methods=["POST"])
 def telegram_webhook():
@@ -196,48 +214,54 @@ def telegram_webhook():
         update_data = request.get_json(force=True)
         update = Update.de_json(update_data, application.bot)
         
-        # Process the update asynchronously using the existing event loop
-        loop.run_until_complete(application.process_update(update))
+        # Process the update using the thread-safe helper
+        run_async(application.process_update(update))
         
         return "OK"
 
 # Vercel webhook route (no authentication)
 @flask_app.route("/vercel-webhook", methods=["POST"])
 def vercel_webhook():
-    if request.method == "POST":
-        logger.info("Received request to /vercel-webhook")
-        # Log headers for debugging
-        logger.debug(f"Request headers: {dict(request.headers)}")
+    logger.info("🔍 WEBHOOK RECEIVED")
+    
+    # Log request details
+    logger.info(f"Method: {request.method}")
+    logger.info(f"Headers: {dict(request.headers)}")
+    
+    if request.data:
+        logger.info(f"Raw data length: {len(request.data)} bytes")
+    
+    # Get deployment data from the request
+    try:
+        payload = request.get_json(force=True)
+        logger.info(f"Received Vercel webhook with type: {payload.get('type', 'unknown')}")
         
-        # Get deployment data from the request
-        try:
-            payload = request.get_json(force=True)
-            logger.info(f"Received Vercel webhook payload: {payload}")
+        # Save raw payload for debugging
+        timestamp = int(time.time())
+        with open(f"vercel_payload_{timestamp}.json", "w") as f:
+            json.dump(payload, f, indent=2)
+        
+        # Handle different webhook formats
+        event_type = payload.get('type')
+        deployment_data = None
+        
+        if event_type in ['deployment', 'deployment.ready', 'deployment.error']:
+            # Standard Vercel webhook format
+            if 'payload' in payload:
+                deployment_data = payload.get('payload', {})
+            else:
+                deployment_data = payload
+        
+        # If we have deployment data, send the notification
+        if deployment_data:
+            logger.info(f"Processing deployment with state: {deployment_data.get('state', 'unknown')}")
+            # Run the async function in a thread-safe way
+            run_async(send_deployment_notification(deployment_data))
             
-            # Create a file with the payload for debugging
-            with open(f"vercel_payload_{int(asyncio.get_event_loop().time())}.json", "w") as f:
-                json.dump(payload, f, indent=2)
-            
-            # Handle both direct payloads and nested payloads
-            event_type = payload.get('type')
-            logger.info(f"Event type: {event_type}")
-            
-            if event_type in ['deployment', 'deployment.ready', 'deployment.error']:
-                # Get the actual deployment data
-                if 'payload' in payload:
-                    deployment_data = payload.get('payload', {})
-                else:
-                    deployment_data = payload
-                
-                logger.info(f"Processing deployment data: {deployment_data}")
-                
-                # Send notification asynchronously
-                loop.run_until_complete(send_deployment_notification(deployment_data))
-                
-            return jsonify({"status": "success"}), 200
-        except Exception as e:
-            logger.error(f"Error processing Vercel webhook: {str(e)}", exc_info=True)
-            return jsonify({"error": str(e)}), 500
+        return jsonify({"status": "success"}), 200
+    except Exception as e:
+        logger.error(f"Error processing Vercel webhook: {str(e)}", exc_info=True)
+        return jsonify({"error": str(e)}), 500
 
 # Add a simple test endpoint
 @flask_app.route("/test", methods=["GET"])
@@ -250,13 +274,38 @@ def test_endpoint():
         "chat_id": CHAT_ID or "Not configured"
     })
 
+# Manual test endpoint
+@flask_app.route("/manual-test", methods=["GET"])
+def manual_test():
+    # Run the test payload through the notification system
+    test_payload = {
+        "id": "manual-test",
+        "name": "manual-test",
+        "url": "test.vercel.app",
+        "state": "READY",
+        "meta": {
+            "githubCommitMessage": "Manual test",
+            "githubCommitSha": "abcdef1",
+            "githubCommitRef": "main" 
+        }
+    }
+    
+    try:
+        # Use the thread-safe helper
+        run_async(send_deployment_notification(test_payload))
+        return jsonify({"status": "Test notification triggered"})
+    except Exception as e:
+        logger.error(f"Error in manual test: {str(e)}")
+        return jsonify({"error": str(e)}), 500
+
 if __name__ == "__main__":
-    # Set the webhook using the event loop
+    # Set the webhook in a thread-safe way
     webhook_url = f"{WEBHOOK_HOST}/webhook/{SECRET_TOKEN}"
-    loop.run_until_complete(application.bot.set_webhook(url=webhook_url))
+    run_async(application.bot.set_webhook(url=webhook_url))
     print(f"✅ Telegram webhook set: {webhook_url}")
     print(f"✅ Vercel webhook available at: {WEBHOOK_HOST}/vercel-webhook")
     print(f"✅ Test endpoint available at: {WEBHOOK_HOST}/test")
+    print(f"✅ Manual test available at: {WEBHOOK_HOST}/manual-test")
 
     # Run the Flask application
-    flask_app.run(host="0.0.0.0", port=PORT, debug=True)
+    flask_app.run(host="0.0.0.0", port=PORT)
