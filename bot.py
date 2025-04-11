@@ -33,6 +33,9 @@ logger = logging.getLogger(__name__)
 # Flask app for webhook
 flask_app = Flask(__name__)
 
+async def hello(update: Update, context: ContextTypes.DEFAULT_TYPE):
+    await update.message.reply_text("👋 Hello! The bot is up and running.")
+
 async def pull(update: Update, context: ContextTypes.DEFAULT_TYPE):
     if not context.args:
         await update.message.reply_text("Please provide a PR number or branch name.")
@@ -57,6 +60,8 @@ async def pull(update: Update, context: ContextTypes.DEFAULT_TYPE):
 # Main bot setup
 application = Application.builder().token(TELEGRAM_TOKEN).build()
 application.add_handler(CommandHandler("pull", pull))
+application.add_handler(CommandHandler("hello", hello))
+
 
 # Webhook route
 @flask_app.route(f"/webhook/{SECRET_TOKEN}", methods=["POST"])
