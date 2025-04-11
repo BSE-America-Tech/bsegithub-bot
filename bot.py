@@ -22,6 +22,9 @@ WEBHOOK_HOST = os.getenv("WEBHOOK_HOST")
 PORT = int(os.getenv("PORT", 8443))
 SECRET_TOKEN = os.getenv("SECRET_TOKEN")
 TELEGRAM_GROUP_CHAT_ID = os.getenv("TELEGRAM_GROUP_CHAT_ID")
+VERCEL_API_TOKEN = os.getenv("VERCEL_API_TOKEN")
+VERCEL_TEAM_ID = os.getenv("VERCEL_TEAM_ID")  # Optional, if using a team
+VERCEL_PROJECT_ID = os.getenv("VERCEL_PROJECT_ID")
 
 # GitHub headers
 headers = {
@@ -35,6 +38,12 @@ logger = logging.getLogger(__name__)
 
 # Flask app for webhook
 flask_app = Flask(__name__)
+
+# Headers for Vercel API
+vercel_headers = {
+    "Authorization": f"Bearer {VERCEL_API_TOKEN}",
+    "Content-Type": "application/json",
+}
 
 
 async def hello(update: Update, context: ContextTypes.DEFAULT_TYPE):
@@ -93,45 +102,65 @@ def webhook():
         return "OK"
 
 
-# Vercel webhook route
-@flask_app.route("/webhook/vercel", methods=["POST"])
-def vercel_webhook():
-    try:
-        # Log the incoming request
-        logger.info("Vercel webhook received")
-        payload = request.get_json(force=True)
-        logger.info(f"Request payload: {payload}")
+# Track notified deployments
+notified_deployments = set()
 
-        # Extract the nested job object
-        job = payload.get("job", {})
-        job_id = job.get("id", "Unknown ID")
-        job_state = job.get("state", "unknown").upper()  # Normalize state to uppercase
-        created_at = job.get("createdAt", None)
 
-        # Define the message based on the job state
-        if job_state == "READY":
-            message = f"🚀 Deployment Successful!\nJob ID: {job_id}"
-        elif job_state == "ERROR":
-            message = f"❌ Deployment Failed!\nJob ID: {job_id}"
-        elif job_state == "PENDING":
-            message = f"⏳ Deployment Pending...\nJob ID: {job_id}"
-        else:
-            message = f"ℹ️ Deployment State: {job_state}\nJob ID: {job_id}"
+# Function to poll Vercel API
+async def poll_vercel_deployments():
+    while True:
+        try:
+            # Fetch recent deployments
+            url = f"https://api.vercel.com/v6/deployments"
+            params = {
+                "projectId": VERCEL_PROJECT_ID,
+                "teamId": VERCEL_TEAM_ID,  # Optional
+            }
+            response = requests.get(url, headers=vercel_headers, params=params)
+            response.raise_for_status()
+            deployments = response.json().get("deployments", [])
 
-        # Send the message to the Telegram group
-        chat_id = TELEGRAM_GROUP_CHAT_ID
-        if chat_id:
-            loop.run_until_complete(
-                application.bot.send_message(chat_id=chat_id, text=message)
-            )
-        else:
-            logger.error("Telegram group chat ID not set.")
+            # Process deployments
+            for deployment in deployments:
+                deployment_id = deployment.get("uid")
+                deployment_state = deployment.get("state", "unknown").upper()
+                deployment_url = deployment.get("url", "No URL provided")
+                project_name = deployment.get("name", "Unknown Project")
 
-        return "OK", 200  # Always return 200 to avoid retries from Vercel
+                # Skip already-notified deployments
+                if deployment_id in notified_deployments:
+                    continue
 
-    except Exception as e:
-        logger.error(f"Error processing Vercel webhook: {e}")
-        return "Error", 200  # Always return 200 to avoid retries from Vercel
+                # Notify based on deployment state
+                if deployment_state == "READY":
+                    message = f"🚀 Deployment Successful!\nProject: {project_name}\nURL: {deployment_url}"
+                elif deployment_state == "ERROR":
+                    message = f"❌ Deployment Failed!\nProject: {project_name}\nDeployment ID: {deployment_id}"
+                else:
+                    continue  # Skip other states (e.g., QUEUED, BUILDING)
+
+                # Send the message to the Telegram group
+                chat_id = TELEGRAM_GROUP_CHAT_ID
+                if chat_id:
+                    await application.bot.send_message(chat_id=chat_id, text=message)
+
+                # Mark deployment as notified
+                notified_deployments.add(deployment_id)
+
+        except Exception as e:
+            logger.error(f"Error polling Vercel API: {e}")
+
+        # Wait before polling again
+        await asyncio.sleep(60)  # Poll every 60 seconds
+
+
+# Start the polling task
+@flask_app.before_first_request
+def start_polling_task():
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    loop.create_task(poll_vercel_deployments())
+    loop.run_forever()
 
 
 if __name__ == "__main__":
