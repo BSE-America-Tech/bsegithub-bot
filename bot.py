@@ -66,9 +66,14 @@ application.add_handler(CommandHandler("hello", hello))
 # Webhook route
 @flask_app.route(f"/webhook/{SECRET_TOKEN}", methods=["POST"])
 def webhook():
-    update = Update.de_json(request.get_json(force=True), application.bot)
-    application.update_queue.put(update)
-    return "OK"
+    if request.method == "POST":
+        update_data = request.get_json(force=True)
+        update = Update.de_json(update_data, application.bot)
+
+        # Process the update directly
+        asyncio.run(application.process_update(update))
+
+        return "OK"
 
 if __name__ == "__main__":
     import asyncio
