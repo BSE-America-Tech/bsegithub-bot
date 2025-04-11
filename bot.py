@@ -71,10 +71,13 @@ def webhook():
     return "OK"
 
 if __name__ == "__main__":
-    # Set Telegram webhook
-    application.bot.set_webhook(
-        url=f"{WEBHOOK_HOST}/webhook/{SECRET_TOKEN}"
-    )
+    import asyncio
 
-    # Run Flask server
+    async def set_webhook():
+        webhook_url = f"{WEBHOOK_HOST}/webhook/{SECRET_TOKEN}"
+        await application.bot.set_webhook(url=webhook_url)
+        print(f"✅ Webhook set: {webhook_url}")
+
+    asyncio.run(set_webhook())  # Set the webhook on startup
+
     flask_app.run(host="0.0.0.0", port=PORT)
