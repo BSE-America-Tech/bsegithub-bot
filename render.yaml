@@ -1,0 +1,27 @@
+services:
+  - type: web
+    name: bsegithub-bot
+    env: python
+    buildCommand: pip install -r requirements.txt
+    startCommand: python bot.py
+    envVars:
+      - key: TELEGRAM_TOKEN
+        sync: false
+      - key: GITHUB_TOKEN
+        sync: false
+      - key: GITHUB_REPO
+        sync: false
+      - key: WEBHOOK_HOST
+        sync: false
+      - key: PORT
+        value: 10000
+      - key: SECRET_TOKEN
+        sync: false
+      - key: TELEGRAM_CHAT_ID
+        sync: false
+      - key: VERCEL_API_TOKEN
+        sync: false
+      - key: VERCEL_TEAM_ID
+        sync: false
+      - key: VERCEL_PROJECT_ID
+        sync: false
