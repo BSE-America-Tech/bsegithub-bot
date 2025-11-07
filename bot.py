@@ -85,8 +85,8 @@ async def get_deployment(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def get_latest_deployment():
     """Get the latest deployment from Vercel API"""
-    # Use v9 API endpoint (current stable version)
-    url = "https://api.vercel.com/v9/deployments"
+    # Use v6 API endpoint
+    url = "https://api.vercel.com/v6/deployments"
 
     # Headers for Vercel API
     headers = {
@@ -246,8 +246,8 @@ def get_deployment_by_id(deployment_id):
     if not deployment_id:
         return None
 
-    # Use v13 API endpoint (current stable version for single deployment)
-    url = f"https://api.vercel.com/v13/deployments/{deployment_id}"
+    # Use v11 API endpoint
+    url = f"https://api.vercel.com/v11/deployments/{deployment_id}"
 
     headers = {
         "Authorization": f"Bearer {VERCEL_API_TOKEN}",
