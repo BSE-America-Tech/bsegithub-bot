@@ -253,38 +253,68 @@ def get_deployment_by_id(deployment_id):
     return None
 
 
-# Create application and add handlers
-application = Application.builder().token(TELEGRAM_TOKEN).build()
-application.add_handler(CommandHandler("pull", pull))
-application.add_handler(CommandHandler("hello", hello))
-application.add_handler(CommandHandler("deployment", get_deployment))
-application.add_handler(CommandHandler("start_monitor", start_polling_deployments))
-application.add_handler(CommandHandler("stop_monitor", stop_polling_deployments))
+# Global variables for async handling
+application = None
+loop = None
 
-# Create event loop for async processing
-loop = asyncio.new_event_loop()
-asyncio.set_event_loop(loop)
 
-# Initialize the application
-loop.run_until_complete(application.initialize())
+def setup_application():
+    """Initialize the telegram application"""
+    global application, loop
+
+    # Create application and add handlers
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    application.add_handler(CommandHandler("pull", pull))
+    application.add_handler(CommandHandler("hello", hello))
+    application.add_handler(CommandHandler("deployment", get_deployment))
+    application.add_handler(CommandHandler("start_monitor", start_polling_deployments))
+    application.add_handler(CommandHandler("stop_monitor", stop_polling_deployments))
+
+    # Create and set event loop
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+
+    # Initialize and start the application
+    loop.run_until_complete(application.initialize())
+    loop.run_until_complete(application.start())
+
+    return application, loop
+
 
 # Webhook route
 @flask_app.route(f"/webhook/{SECRET_TOKEN}", methods=["POST"])
 def webhook():
     if request.method == "POST":
-        update_data = request.get_json(force=True)
-        update = Update.de_json(update_data, application.bot)
-        
-        # Process the update asynchronously using the existing event loop
-        loop.run_until_complete(application.process_update(update))
-        
-        return "OK"
+        try:
+            update_data = request.get_json(force=True)
+            update = Update.de_json(update_data, application.bot)
+
+            # Process the update asynchronously
+            asyncio.run_coroutine_threadsafe(
+                application.process_update(update),
+                loop
+            )
+
+            return "OK", 200
+        except Exception as e:
+            logger.error(f"Error processing webhook: {e}")
+            return "Error", 500
+
 
 if __name__ == "__main__":
-    # Set the webhook using the event loop
+    # Setup the application
+    setup_application()
+
+    # Set the webhook
     webhook_url = f"{WEBHOOK_HOST}/webhook/{SECRET_TOKEN}"
     loop.run_until_complete(application.bot.set_webhook(url=webhook_url))
     print(f"✅ Webhook set: {webhook_url}")
 
     # Run the Flask application
-    flask_app.run(host="0.0.0.0", port=PORT)
+    try:
+        flask_app.run(host="0.0.0.0", port=PORT)
+    finally:
+        # Cleanup on shutdown
+        loop.run_until_complete(application.stop())
+        loop.run_until_complete(application.shutdown())
+        loop.close()
