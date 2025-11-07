@@ -2,6 +2,7 @@ import os
 import logging
 import requests
 import asyncio
+import threading
 from datetime import datetime
 from flask import Flask, request
 from telegram import Update
@@ -256,11 +257,18 @@ def get_deployment_by_id(deployment_id):
 # Global variables for async handling
 application = None
 loop = None
+loop_thread = None
+
+
+def run_event_loop(loop):
+    """Run the event loop in a separate thread"""
+    asyncio.set_event_loop(loop)
+    loop.run_forever()
 
 
 def setup_application():
     """Initialize the telegram application"""
-    global application, loop
+    global application, loop, loop_thread
 
     # Create application and add handlers
     application = Application.builder().token(TELEGRAM_TOKEN).build()
@@ -270,13 +278,18 @@ def setup_application():
     application.add_handler(CommandHandler("start_monitor", start_polling_deployments))
     application.add_handler(CommandHandler("stop_monitor", stop_polling_deployments))
 
-    # Create and set event loop
+    # Create event loop for async operations
     loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
+
+    # Run the event loop in a background thread
+    loop_thread = threading.Thread(target=run_event_loop, args=(loop,), daemon=True)
+    loop_thread.start()
 
     # Initialize and start the application
-    loop.run_until_complete(application.initialize())
-    loop.run_until_complete(application.start())
+    asyncio.run_coroutine_threadsafe(application.initialize(), loop).result()
+    asyncio.run_coroutine_threadsafe(application.start(), loop).result()
+
+    logger.info("Telegram application initialized and started")
 
     return application, loop
 
@@ -287,17 +300,29 @@ def webhook():
     if request.method == "POST":
         try:
             update_data = request.get_json(force=True)
-            update = Update.de_json(update_data, application.bot)
+            logger.info(f"Received webhook update: {update_data}")
 
-            # Process the update asynchronously
-            asyncio.run_coroutine_threadsafe(
+            update = Update.de_json(update_data, application.bot)
+            logger.info(f"Parsed update object: {update}")
+
+            # Process the update asynchronously and get the future
+            future = asyncio.run_coroutine_threadsafe(
                 application.process_update(update),
                 loop
             )
 
+            # Add a callback to log any exceptions
+            def log_exception(fut):
+                try:
+                    fut.result()
+                except Exception as e:
+                    logger.error(f"Error in async update processing: {e}", exc_info=True)
+
+            future.add_done_callback(log_exception)
+
             return "OK", 200
         except Exception as e:
-            logger.error(f"Error processing webhook: {e}")
+            logger.error(f"Error processing webhook: {e}", exc_info=True)
             return "Error", 500
 
 
@@ -307,7 +332,7 @@ if __name__ == "__main__":
 
     # Set the webhook
     webhook_url = f"{WEBHOOK_HOST}/webhook/{SECRET_TOKEN}"
-    loop.run_until_complete(application.bot.set_webhook(url=webhook_url))
+    asyncio.run_coroutine_threadsafe(application.bot.set_webhook(url=webhook_url), loop).result()
     print(f"✅ Webhook set: {webhook_url}")
 
     # Run the Flask application
@@ -315,6 +340,9 @@ if __name__ == "__main__":
         flask_app.run(host="0.0.0.0", port=PORT)
     finally:
         # Cleanup on shutdown
-        loop.run_until_complete(application.stop())
-        loop.run_until_complete(application.shutdown())
-        loop.close()
+        logger.info("Shutting down application...")
+        asyncio.run_coroutine_threadsafe(application.stop(), loop).result()
+        asyncio.run_coroutine_threadsafe(application.shutdown(), loop).result()
+        loop.call_soon_threadsafe(loop.stop)
+        loop_thread.join(timeout=5)
+        logger.info("Application shutdown complete")
