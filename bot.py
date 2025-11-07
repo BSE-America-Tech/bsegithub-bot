@@ -107,19 +107,13 @@ def get_latest_deployment():
     if VERCEL_TEAM_ID:
         params["teamId"] = VERCEL_TEAM_ID
 
-    logger.info(f"Fetching deployment from Vercel API: {url}")
-    logger.info(f"Params: projectId={VERCEL_PROJECT_ID}, teamId={VERCEL_TEAM_ID}")
-
     response = requests.get(url, params=params, headers=headers)
 
     if response.status_code == 200:
         data = response.json()
         deployments = data.get("deployments", [])
         if deployments:
-            logger.info(f"Successfully fetched deployment: {deployments[0].get('uid')}")
             return deployments[0]
-        else:
-            logger.warning("No deployments found in response")
     else:
         logger.error(f"Failed to get deployment: {response.status_code} - {response.text}")
 
@@ -258,12 +252,9 @@ def get_deployment_by_id(deployment_id):
     if VERCEL_TEAM_ID:
         params["teamId"] = VERCEL_TEAM_ID
 
-    logger.info(f"Fetching deployment by ID from Vercel API: {deployment_id}")
-
     response = requests.get(url, params=params, headers=headers)
 
     if response.status_code == 200:
-        logger.info(f"Successfully fetched deployment by ID: {deployment_id}")
         return response.json()
 
     logger.error(f"Failed to get deployment by ID: {response.status_code} - {response.text}")
@@ -305,8 +296,6 @@ def setup_application():
     asyncio.run_coroutine_threadsafe(application.initialize(), loop).result()
     asyncio.run_coroutine_threadsafe(application.start(), loop).result()
 
-    logger.info("Telegram application initialized and started")
-
     return application, loop
 
 
@@ -316,10 +305,7 @@ def webhook():
     if request.method == "POST":
         try:
             update_data = request.get_json(force=True)
-            logger.info(f"Received webhook update: {update_data}")
-
             update = Update.de_json(update_data, application.bot)
-            logger.info(f"Parsed update object: {update}")
 
             # Process the update asynchronously and get the future
             future = asyncio.run_coroutine_threadsafe(
@@ -356,9 +342,7 @@ if __name__ == "__main__":
         flask_app.run(host="0.0.0.0", port=PORT)
     finally:
         # Cleanup on shutdown
-        logger.info("Shutting down application...")
         asyncio.run_coroutine_threadsafe(application.stop(), loop).result()
         asyncio.run_coroutine_threadsafe(application.shutdown(), loop).result()
         loop.call_soon_threadsafe(loop.stop)
         loop_thread.join(timeout=5)
-        logger.info("Application shutdown complete")
