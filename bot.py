@@ -85,32 +85,44 @@ async def get_deployment(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
 def get_latest_deployment():
     """Get the latest deployment from Vercel API"""
-    url = "https://api.vercel.com/v6/deployments"
-    
-    # Add query parameters
-    params = {
-        "projectId": VERCEL_PROJECT_ID,
-        "limit": 1,  # We only want the latest deployment
-    }
-    
-    # Add team ID if present
-    if VERCEL_TEAM_ID:
-        params["teamId"] = VERCEL_TEAM_ID
-    
+    # Use v9 API endpoint (current stable version)
+    url = "https://api.vercel.com/v9/deployments"
+
     # Headers for Vercel API
     headers = {
         "Authorization": f"Bearer {VERCEL_API_TOKEN}",
         "Content-Type": "application/json"
     }
-    
+
+    # Add query parameters
+    params = {
+        "limit": 1,  # We only want the latest deployment
+    }
+
+    # Add project ID if specified
+    if VERCEL_PROJECT_ID:
+        params["projectId"] = VERCEL_PROJECT_ID
+
+    # Add team ID if present (for team projects)
+    if VERCEL_TEAM_ID:
+        params["teamId"] = VERCEL_TEAM_ID
+
+    logger.info(f"Fetching deployment from Vercel API: {url}")
+    logger.info(f"Params: projectId={VERCEL_PROJECT_ID}, teamId={VERCEL_TEAM_ID}")
+
     response = requests.get(url, params=params, headers=headers)
-    
+
     if response.status_code == 200:
-        deployments = response.json().get("deployments", [])
+        data = response.json()
+        deployments = data.get("deployments", [])
         if deployments:
+            logger.info(f"Successfully fetched deployment: {deployments[0].get('uid')}")
             return deployments[0]
-    
-    logger.error(f"Failed to get deployment: {response.status_code} - {response.text}")
+        else:
+            logger.warning("No deployments found in response")
+    else:
+        logger.error(f"Failed to get deployment: {response.status_code} - {response.text}")
+
     return None
 
 
@@ -233,23 +245,27 @@ def get_deployment_by_id(deployment_id):
     """Get a specific deployment by ID"""
     if not deployment_id:
         return None
-    
-    url = f"https://api.vercel.com/v11/deployments/{deployment_id}"
-    
-    params = {}
-    if VERCEL_TEAM_ID:
-        params["teamId"] = VERCEL_TEAM_ID
-    
+
+    # Use v13 API endpoint (current stable version for single deployment)
+    url = f"https://api.vercel.com/v13/deployments/{deployment_id}"
+
     headers = {
         "Authorization": f"Bearer {VERCEL_API_TOKEN}",
         "Content-Type": "application/json"
     }
-    
+
+    params = {}
+    if VERCEL_TEAM_ID:
+        params["teamId"] = VERCEL_TEAM_ID
+
+    logger.info(f"Fetching deployment by ID from Vercel API: {deployment_id}")
+
     response = requests.get(url, params=params, headers=headers)
-    
+
     if response.status_code == 200:
+        logger.info(f"Successfully fetched deployment by ID: {deployment_id}")
         return response.json()
-    
+
     logger.error(f"Failed to get deployment by ID: {response.status_code} - {response.text}")
     return None
 
